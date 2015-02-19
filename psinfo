@@ -1,0 +1,36 @@
+#!/bin/env python
+import sys
+import time
+import json
+from logging import getLogger, basicConfig 
+
+logger = getLogger(__name__)
+logcfg = {
+  #"format": "%(asctime)s.%(msecs).03d %(process)d %(thread)x %(levelname).4s;%(module)s(%(lineno)d/%(funcName)s) %(message)s",
+  "format": "%(asctime)s.%(msecs).03d %(message)s",
+  "datefmt": "%Y/%m/%dT%H:%M:%S",
+  "level": 15,
+  "stream": sys.stdout,
+}
+basicConfig(**logcfg)
+
+
+def main(cmd, interval):
+    from psmon import ProcInfoIter
+
+    itp=ProcInfoIter()
+    title='comm pid cpu usr sys vsz rsz utime stime cutime cstime delta'.split(' ')
+    logger.info( '{comm:<10} {pid:>6} {cpu:>6} {usr:>6} {sys:>6} {vsz:>8} {rsz:>8} {utime:>6} {stime:>6} {cutime:>6} {cstime:>6} {delta}'.format(**dict(zip(title,title))))
+
+    #print json.dumps(itp.next())
+    #print json.dumps(dict([v for k,v in itp.next().items() if cmd in v['comm'] ]))
+    #print json.dumps([v for k,v in itp.next().items() if isinstance( v, dict)  if 'comm' in v if cmd in v['comm'] ] )
+    while True:
+        for val in  ['{comm:<10} {pid:>6} {cpu:>6.3f} {usr:>6.3f} {sys:>6.3f} {vsz:>8} {rsz:>8} {utime:>6} {stime:>6} {cutime:>6} {cstime:>6} {delta}'.format(**dict(v.items()+[('pid',k)])) for k,v in itp.next().items() if isinstance( v, dict)  if 'comm' in v if cmd in v['comm'] ]:
+            logger.info(val)
+        time.sleep(interval)
+
+if __name__ == '__main__':
+    
+    main(cmd=sys.argv[1], interval=None if len(sys.argv) < 3 else float(sys.argv[2]))
+

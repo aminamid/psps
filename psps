@@ -1,0 +1,136 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import sys
+import time
+import json
+import glob
+from logging import getLogger, basicConfig
+
+import pspscfg
+
+logger = getLogger(__name__)
+logcfg = {
+  #"format": "%(asctime)s.%(msecs).03d %(process)d %(thread)x %(levelname).4s;%(module)s(%(lineno)d/%(funcName)s) %(message)s",
+  "format": "%(asctime)s.%(msecs).03d %(message)s",
+  "datefmt": "%Y/%m/%dT%H:%M:%S",
+  "level": 5,
+  "stream": sys.stdout,
+}
+basicConfig(**logcfg)
+
+cfgjson="""
+"stat_index": [
+    "pid",         # 1
+    "comm",        # 2
+    "state",       # 3
+    "ppid",        # 4
+    "pgrp",        # 5
+    "session",     # 6
+    "tty_nr",      # 7
+    "tpgid",       # 8
+    "flags",       # 9
+    "minflt",      #10
+    "cminflt",     #11
+    "majflt",      #12
+    "cmajflt",     #13
+    "utime",       #14
+    "stime",       #15
+    "cutime",      #16
+    "cstime",      #17
+    "priority",    #18
+    "nice",        #19
+    "num_threads", #20
+    "itrealvalue", #21
+    "starttime",   #22
+    "vsize",       #23
+    "rss",         #24
+    "rsslim"       #25
+    "startcode",   #26
+    "encode",      #27
+    "startstack",  #28
+    "kstkesp",     #29
+    "kstkeip",     #30
+    "signal",      #31
+    "blocked",     #32
+    "sigignore",   #33
+    "sigcactch",   #34
+    "wchan",       #35
+    "nswap",       #36
+    "cnswap",      #37
+    "exit_signal", #38
+    "processor",   #39
+    "rt_priority", #40
+    "policy",      #41
+    "delayacct_blkio_ticks", #42
+    "guest_time",  #43
+    "cguest_time", #44
+]
+"show": {
+    "pid" : "{pid:<6}",
+ 
+}
+"""
+
+
+
+def parsed_opts():
+    import optparse
+    import os
+
+    opt = optparse.OptionParser(usage = "usage: %prog [options] arg1 arg2")
+    opt.add_option("-c", "--count", default=5, help="count to sampling [default: %default]" )
+    opt.add_option("-i", "--interval", default=1, help="interval to sampling [default: %default]" )
+    (opts, args)= opt.parse_args()
+    return dict(opts.__dict__.items() + [('filters', args)])
+
+class Scheduler(object):
+    def __init__(self):
+
+
+    
+def fl(file):
+    try:
+      return open(file).readline().strip()
+    except IOError as e:
+      return None
+
+def fa(file):
+    try:
+      return [ l.strip() for l in open(file) ]
+    except IOError as e:
+      return None
+
+def ints_strs(digit_str_list):
+    return ( [ int(x) for x in digit_str_list if x.isdigit() ], [ x for x in digit_str_list if not x.isdigit() ] )
+
+def proc_raw_iter():
+    pids = [ int(p) for p in [ x.split('/')[2] for x in glob.glob('/proc/*')] if p.isdigit()]
+    return ( proc for proc in [ [ fl('/proc/{0}/stat'.format(p)), fl('/proc/{0}/cmdline'.format(p)), fa('/proc/{0}/status'.format(p)), fl('/proc/stat') ] for p in pids] if not None in proc )
+
+def stat_convert(stat_str):
+    return [x if i in [1,2] else int(x) for i,x in enumerate(stat_str.split())]
+
+def cmdline_convert(cmdline_str):
+    return cmdline_str.replace('\0',' ').strip()
+
+def status_convert(status_lists):
+    return [(y[0], y[1].split()) for y in [x.split(':') for x in status_lists if ':' in x] ]
+
+def proc_info(iproc):
+    return  [dict(zip(pspscfg.STAT_INDEX, stat_convert(x[0])) + [('cmdline',cmdline_convert(x[1]))] + status_convert(x[2])) for x in  iproc]
+
+def main(opts):
+    logger.debug('opts:{0}'.format(opts))
+    pinfo = proc_info(proc_raw_iter())
+    (pid_filter,comm_filter) = ints_strs(opts['filters'])
+
+    for p in pinfo:
+      if pid_filter and not p['pid'] in pid_filter: continue
+      if comm_filter and not p['comm'].strip('()') in comm_filter: continue
+      logger.info('{0}:{1}:{2}:{3}'.format(p['pid'],p['comm'].strip('()'),p['cmdline'],'' if not 'VmSize' in p else p['VmSize']))
+
+if __name__ == '__main__':
+
+    main( parsed_opts() )
+

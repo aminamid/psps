@@ -5,11 +5,11 @@ import sys
 import time
 import json
 import glob
+from itertools import chain
 from logging import getLogger, basicConfig
 
-import pspscfg
-
 logger = getLogger(__name__)
+
 logcfg = {
   #"format": "%(asctime)s.%(msecs).03d %(process)d %(thread)x %(levelname).4s;%(module)s(%(lineno)d/%(funcName)s) %(message)s",
   "format": "%(asctime)s.%(msecs).03d %(message)s",
@@ -19,8 +19,7 @@ logcfg = {
 }
 basicConfig(**logcfg)
 
-cfgjson="""
-"stat_index": [
+STAT_INDEX=[
     "pid",         # 1
     "comm",        # 2
     "state",       # 3
@@ -66,13 +65,11 @@ cfgjson="""
     "guest_time",  #43
     "cguest_time", #44
 ]
-"show": {
+
+FORMATS={
     "pid" : "{pid:<6}",
- 
+    "comm" : "{comm:<10}",
 }
-"""
-
-
 
 def parsed_opts():
     import optparse
@@ -83,48 +80,47 @@ def parsed_opts():
     opt.add_option("-i", "--interval", default=1, help="interval to sampling [default: %default]" )
     (opts, args)= opt.parse_args()
     return dict(opts.__dict__.items() + [('filters', args)])
-
-class Scheduler(object):
-    def __init__(self):
-
-
     
-def fl(file):
+def mfl(file):
     try:
       return open(file).readline().strip()
     except IOError as e:
       return None
 
-def fa(file):
+def mfa(file):
     try:
       return [ l.strip() for l in open(file) ]
     except IOError as e:
       return None
 
+def mprocf_iter():
+    pids = [ int(p) for p in [ x.split('/')[2] for x in glob.glob('/proc/*')] if p.isdigit()]
+    return ( proc for proc in [ [ mfl('/proc/{0}/stat'.format(p)), mfl('/proc/{0}/cmdline'.format(p)), mfa('/proc/{0}/status'.format(p)), mfl('/proc/stat') ] for p in pids] if not None in proc )
+
 def ints_strs(digit_str_list):
     return ( [ int(x) for x in digit_str_list if x.isdigit() ], [ x for x in digit_str_list if not x.isdigit() ] )
 
-def proc_raw_iter():
-    pids = [ int(p) for p in [ x.split('/')[2] for x in glob.glob('/proc/*')] if p.isdigit()]
-    return ( proc for proc in [ [ fl('/proc/{0}/stat'.format(p)), fl('/proc/{0}/cmdline'.format(p)), fa('/proc/{0}/status'.format(p)), fl('/proc/stat') ] for p in pids] if not None in proc )
-
-def stat_convert(stat_str):
+def stat_parse(stat_str):
     return [x if i in [1,2] else int(x) for i,x in enumerate(stat_str.split())]
 
-def cmdline_convert(cmdline_str):
+def cmdline_parse(cmdline_str):
     return cmdline_str.replace('\0',' ').strip()
 
-def status_convert(status_lists):
+def status_parse(status_lists):
     return [(y[0], y[1].split()) for y in [x.split(':') for x in status_lists if ':' in x] ]
 
-def proc_info(iproc):
-    return  [dict(zip(pspscfg.STAT_INDEX, stat_convert(x[0])) + [('cmdline',cmdline_convert(x[1]))] + status_convert(x[2])) for x in  iproc]
+def mprocs(mproci):
+    return  [ dict( list( chain.from_iterable(
+               [ zip( STAT_INDEX, stat_parse( x[0]) ),
+                 [('cmdline',cmdline_parse(x[1]))],
+                 status_parse(x[2]),
+               ]
+             ))) for x in  mproci]
 
 def main(opts):
     logger.debug('opts:{0}'.format(opts))
-    pinfo = proc_info(proc_raw_iter())
+    pinfo = mprocs(mprocf_iter())
     (pid_filter,comm_filter) = ints_strs(opts['filters'])
-
     for p in pinfo:
       if pid_filter and not p['pid'] in pid_filter: continue
       if comm_filter and not p['comm'].strip('()') in comm_filter: continue

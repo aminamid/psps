@@ -3,69 +3,89 @@
 
 import sys
 import time
+import datetime
 import json
 import glob
-from itertools import chain
+import itertools
+import sched
 from logging import getLogger, basicConfig
 
 logger = getLogger(__name__)
 
 logcfg = {
   #"format": "%(asctime)s.%(msecs).03d %(process)d %(thread)x %(levelname).4s;%(module)s(%(lineno)d/%(funcName)s) %(message)s",
-  "format": "%(asctime)s.%(msecs).03d %(message)s",
+  "format": "%(message)s",
   "datefmt": "%Y/%m/%dT%H:%M:%S",
-  "level": 5,
+  "level": 15,
   "stream": sys.stdout,
 }
 basicConfig(**logcfg)
 
-STAT_INDEX=[
-    "pid",         # 1
-    "comm",        # 2
-    "state",       # 3
-    "ppid",        # 4
-    "pgrp",        # 5
-    "session",     # 6
-    "tty_nr",      # 7
-    "tpgid",       # 8
-    "flags",       # 9
-    "minflt",      #10
-    "cminflt",     #11
-    "majflt",      #12
-    "cmajflt",     #13
-    "utime",       #14
-    "stime",       #15
-    "cutime",      #16
-    "cstime",      #17
-    "priority",    #18
-    "nice",        #19
-    "num_threads", #20
-    "itrealvalue", #21
-    "starttime",   #22
-    "vsize",       #23
-    "rss",         #24
-    "rsslim"       #25
-    "startcode",   #26
-    "encode",      #27
-    "startstack",  #28
-    "kstkesp",     #29
-    "kstkeip",     #30
-    "signal",      #31
-    "blocked",     #32
-    "sigignore",   #33
-    "sigcactch",   #34
-    "wchan",       #35
-    "nswap",       #36
-    "cnswap",      #37
-    "exit_signal", #38
-    "processor",   #39
-    "rt_priority", #40
-    "policy",      #41
-    "delayacct_blkio_ticks", #42
-    "guest_time",  #43
-    "cguest_time", #44
-]
-
+MPROC_SPEC={
+  "statidx": (
+    ("pid",         int), # 1
+    ("comm",        str), # 2
+    ("state",       str), # 3
+    ("ppid",        int), # 4
+    ("pgrp",        int), # 5
+    ("session",     int), # 6
+    ("tty_nr",      int), # 7
+    ("tpgid",       int), # 8
+    ("flags",       int), # 9
+    ("minflt",      int), #10
+    ("cminflt",     int), #11
+    ("majflt",      int), #12
+    ("cmajflt",     int), #13
+    ("utime",       int), #14
+    ("stime",       int), #15
+    ("cutime",      int), #16
+    ("cstime",      int), #17
+    ("priority",    int), #18
+    ("nice",        int), #19
+    ("num_threads", int), #20
+    ("itrealvalue", int), #21
+    ("starttime",   int), #22
+    ("vsize",       int), #23
+    ("rss",         int), #24
+    ("rsslim",      int), #25
+    ("startcode",   int), #26
+    ("encode",      int), #27
+    ("startstack",  int), #28
+    ("kstkesp",     int), #29
+    ("kstkeip",     int), #30
+    ("signal",      int), #31
+    ("blocked",     int), #32
+    ("sigignore",   int), #33
+    ("sigcactch",   int), #34
+    ("wchan",       int), #35
+    ("nswap",       int), #36
+    ("cnswap",      int), #37
+    ("exit_signal", int), #38
+    ("processor",   int), #39
+    ("rt_priority", int), #40
+    ("policy",      int), #41
+    ("delayacct_blkio_ticks", int), #42
+    ("guest_time",  int), #43
+    ("cguest_time", int), #44
+  ),
+  "statkeep": ("pid","utime", "stime", "cutime", "cstime", "starttime", "delta", "num_threads", "cmdline", "comm"),
+  "statusidx": dict((
+    ("Uid",     lambda x: int(x[0]) ),
+    ("VmSize",  lambda x: int(x[0]) ),
+    ("VmRSS",   lambda x: int(x[0]) ),
+    ("VmPeak",  lambda x: int(x[0]) ),
+    ("VmHWM",   lambda x: int(x[0]) ),
+    ("VmStk",   lambda x: int(x[0]) ),
+    ("VmData",  lambda x: int(x[0]) ),
+    ("VmExe",   lambda x: int(x[0]) ),
+    ("VmSwap",  lambda x: int(x[0]) ),
+    ("voluntary_ctxt_switches", lambda x: int(x[0]) ),
+    ("nonvoluntary_ctxt_switches", lambda x: int(x[0]) ),
+  )),
+  "cpustat": "cputime",
+  "cmdline": "cmdline",
+  "delta_target": ("utime", "stime", "cutime", "cstime"),
+}
 FORMATS={
     "pid" : "{pid:<6}",
     "comm" : "{comm:<10}",
@@ -78,55 +98,88 @@ def parsed_opts():
     opt = optparse.OptionParser(usage = "usage: %prog [options] arg1 arg2")
     opt.add_option("-c", "--count", default=5, help="count to sampling [default: %default]" )
     opt.add_option("-i", "--interval", default=1, help="interval to sampling [default: %default]" )
+    opt.add_option("-p", "--prof", default=False, action="store_true", help="interval to sampling [default: %default]" )
     (opts, args)= opt.parse_args()
-    return dict(opts.__dict__.items() + [('filters', args)])
+    return dict(opts.__dict__.items() + [("filters", args)])
     
-def mfl(file):
-    try:
-      return open(file).readline().strip()
-    except IOError as e:
-      return None
+def mtimekeeper(interval,init,maxcount):
+    schedule = sched.scheduler(time.time, time.sleep)
+    for count in range(1, 1+maxcount):
+        schedule.enter(init + interval*count - time.time(), 1, lambda x=None: x, ())
+        schedule.run()
+        yield count, time.time()
 
-def mfa(file):
+def mfr(file):
     try:
       return [ l.strip() for l in open(file) ]
     except IOError as e:
-      return None
+      return []
 
-def mprocf_iter():
-    pids = [ int(p) for p in [ x.split('/')[2] for x in glob.glob('/proc/*')] if p.isdigit()]
-    return ( proc for proc in [ [ mfl('/proc/{0}/stat'.format(p)), mfl('/proc/{0}/cmdline'.format(p)), mfa('/proc/{0}/status'.format(p)), mfl('/proc/stat') ] for p in pids] if not None in proc )
+def maybe_fstl(fl):
+    return None if not fl else fl[0]
 
-def ints_strs(digit_str_list):
-    return ( [ int(x) for x in digit_str_list if x.isdigit() ], [ x for x in digit_str_list if not x.isdigit() ] )
+def maybe_l(fl):
+    return None if not fl else fl
 
-def stat_parse(stat_str):
-    return [x if i in [1,2] else int(x) for i,x in enumerate(stat_str.split())]
+def mprocf_iter(spec):
+    pids = [ int(p) for p in [ x.split("/")[2] for x in glob.glob("/proc/*")] if p.isdigit()]
+    return ( dict(concat(proc)) for proc in [
+                    [ stat_parse(    maybe_fstl( mfr( "/proc/{0}/stat".format(p)  )), spec["statidx"], spec["statkeep"] ), 
+                      cmdline_parse( maybe_fstl( mfr("/proc/{0}/cmdline".format(p))), spec["cmdline"]   ),
+                      status_parse(  maybe_l(    mfr("/proc/{0}/status".format(p) )), spec["statusidx"] ),
+                      cpustat_parse( maybe_fstl( mfr("/proc/stat"                 )), spec["cpustat"]   ),
+                    ] for p in pids
+           ] if not None in proc )
 
-def cmdline_parse(cmdline_str):
-    return cmdline_str.replace('\0',' ').strip()
+def stat_parse(s,index,filter):
+    return None if not s else [ ( k[0], k[1](v) )  for (k,v) in zip(index, s.split()) if k[0] in filter]
 
-def status_parse(status_lists):
-    return [(y[0], y[1].split()) for y in [x.split(':') for x in status_lists if ':' in x] ]
+def cpustat_parse(s,index):
+    return None if not s else [ (index, sum( [int(x) for x in s.split()[1:]] )) ]
 
-def mprocs(mproci):
-    return  [ dict( list( chain.from_iterable(
-               [ zip( STAT_INDEX, stat_parse( x[0]) ),
-                 [('cmdline',cmdline_parse(x[1]))],
-                 status_parse(x[2]),
-               ]
-             ))) for x in  mproci]
+def cmdline_parse(s,index):
+    return None if not s else [ ( index, s.replace('\0',' ').strip() )]
+
+def status_parse(l,index):
+    return [(y[0], index[y[0]](y[1].split())) for y in [x.split(':') for x in l if ':' in x] if y[0] in index ]
+
+def concat(ll):
+    return list(itertools.chain.from_iterable(ll))
+
+def isotime(ts):
+    return str(datetime.datetime.fromtimestamp(ts))[0:19].replace(' ','T')
+
+def subv(d,ks):
+    return dict([(k,v) for (k,v) in d.items() if k in ks])
+
+def delta_init(o, n, target):
+    return [x for x in target]
+
+def delta_cont(o, n, target):
+    pass 
+
+def mpsi(delta_target):
+    old={}
+    while True:
+        new = dict(( (p['pid'], p) for p in mprocf_iter(MPROC_SPEC)
+             if not opts["filters"] or ( p['pid'] in opts["filters"] or p['comm'].strip('()') in opts["filters"] ) ))
+        (oldset,newset) = (set(old.keys()),set(new.keys()))
+        
+        yield new
+        old=new
 
 def main(opts):
+    tki=mtimekeeper(interval=opts['interval'], init=time.time(), maxcount=opts['count'])
+    psi=mpsi(MPROC_SPEC['delta_target'])
     logger.debug('opts:{0}'.format(opts))
-    pinfo = mprocs(mprocf_iter())
-    (pid_filter,comm_filter) = ints_strs(opts['filters'])
-    for p in pinfo:
-      if pid_filter and not p['pid'] in pid_filter: continue
-      if comm_filter and not p['comm'].strip('()') in comm_filter: continue
-      logger.info('{0}:{1}:{2}:{3}'.format(p['pid'],p['comm'].strip('()'),p['cmdline'],'' if not 'VmSize' in p else p['VmSize']))
+    for ((c,t), p ) in itertools.izip(tki, psi):
+        logger.info(json.dumps(p))
 
 if __name__ == '__main__':
 
-    main( parsed_opts() )
-
+    opts = parsed_opts()
+    if opts['prof']:
+      import cProfile
+      cProfile.run('main(opts)')
+      sys.exit(0)
+    main(opts)

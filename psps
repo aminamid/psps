@@ -141,7 +141,7 @@ def cmdline_parse(s,index):
     return None if not s else [ ( index, s.replace('\0',' ').strip() )]
 
 def status_parse(l,index):
-    return [(y[0], index[y[0]](y[1].split())) for y in [x.split(':') for x in l if ':' in x] if y[0] in index ]
+    return None if not l else [(y[0], index[y[0]](y[1].split())) for y in [x.split(':') for x in l if ':' in x] if y[0] in index ]
 
 def concat(ll):
     return list(itertools.chain.from_iterable(ll))
